@@ -1,418 +1,914 @@
-document.addEventListener('DOMContentLoaded', () => {
-    const campos = document.querySelectorAll('.card-textarea');
-    const checkboxes = document.querySelectorAll('.card-checkbox');
-  
-    // TEXTAREAS
-    campos.forEach(campo => {
-      const id = campo.id;
-      const salvo = localStorage.getItem(id);
-      if (salvo !== null) {
-        campo.value = salvo;
-      }
-      campo.addEventListener('input', () => {
-        localStorage.setItem(id, campo.value);
-      });
-    });
-  
-    // CHECKBOXES
-    checkboxes.forEach(c => {
-      const id = c.id;
-      const salvo = localStorage.getItem(id);
-      if (salvo !== null) {
-        c.checked = salvo === 'true';
-      }
-      c.addEventListener('change', () => {
-        localStorage.setItem(id, c.checked);
+const STORAGE_KEYS = {
+  config: "agenda-config-v2",
+};
+
+const DAYS = [
+  { key: "segunda", label: "Segunda-Feira", short: "Segunda" },
+  { key: "terca", label: "Terça-Feira", short: "Terça" },
+  { key: "quarta", label: "Quarta-Feira", short: "Quarta" },
+  { key: "quinta", label: "Quinta-Feira", short: "Quinta" },
+  { key: "sexta", label: "Sexta-Feira", short: "Sexta" },
+  { key: "sabado", label: "Sábado", short: "Sábado" },
+];
+
+const DAY_CLASS_MAP = DAYS.reduce((acc, day) => {
+  acc[day.label] = `day-${day.key}`;
+  return acc;
+}, {});
+
+const DAY_ORDER = DAYS.reduce((acc, day, index) => {
+  acc[day.label] = index;
+  return acc;
+}, {});
+
+let agendaConfig = loadConfig();
+
+function createBaseConfig() {
+  return {
+    meta: {
+      teacherSeq: 0,
+      subjectSeq: 0,
+      groupSeq: 0,
+      fieldSeq: 0,
+    },
+    teachers: [],
+  };
+}
+
+function loadConfig() {
+  const raw = localStorage.getItem(STORAGE_KEYS.config);
+  if (!raw) return createBaseConfig();
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed.meta) parsed.meta = {};
+    parsed.meta.teacherSeq = parsed.meta.teacherSeq || 0;
+    parsed.meta.subjectSeq = parsed.meta.subjectSeq || 0;
+    parsed.meta.groupSeq = parsed.meta.groupSeq || 0;
+    parsed.meta.fieldSeq = parsed.meta.fieldSeq || 0;
+    parsed.teachers = parsed.teachers || [];
+    return parsed;
+  } catch (err) {
+    console.error("Erro ao ler configuracao:", err);
+    return createBaseConfig();
+  }
+}
+
+function saveConfig() {
+  localStorage.setItem(STORAGE_KEYS.config, JSON.stringify(agendaConfig));
+}
+
+function nextId(seqKey, prefix) {
+  agendaConfig.meta[seqKey] += 1;
+  return `${prefix}${agendaConfig.meta[seqKey]}`;
+}
+
+function nextFieldId() {
+  agendaConfig.meta.fieldSeq += 1;
+  return `campo${String(agendaConfig.meta.fieldSeq).padStart(3, "0")}`;
+}
+
+function createTeacher(name) {
+  const id = nextId("teacherSeq", "t");
+  return {
+    id,
+    name,
+    checkboxId: `check-${id}`,
+    subjects: [],
+  };
+}
+
+function createSubject(name) {
+  const id = nextId("subjectSeq", "s");
+  return {
+    id,
+    name,
+    groups: [],
+  };
+}
+
+function createGroup(label) {
+  const id = nextId("groupSeq", "g");
+  return {
+    id,
+    label,
+    days: [],
+  };
+}
+
+function createDay(dayLabel) {
+  return {
+    label: dayLabel,
+    fields: {
+      contentId: nextFieldId(),
+      homeworkId: nextFieldId(),
+    },
+  };
+}
+
+function getTeacherById(teacherId) {
+  return agendaConfig.teachers.find((teacher) => teacher.id === teacherId);
+}
+
+function getSubjectById(teacher, subjectId) {
+  return teacher.subjects.find((subject) => subject.id === subjectId);
+}
+
+function getGroupById(subject, groupId) {
+  return subject.groups.find((group) => group.id === groupId);
+}
+
+function ensureDay(group, dayLabel) {
+  const existing = group.days.find((day) => day.label === dayLabel);
+  if (existing) return;
+  group.days.push(createDay(dayLabel));
+}
+
+function removeDay(group, dayLabel) {
+  group.days = group.days.filter((day) => day.label !== dayLabel);
+}
+
+function showToast(message) {
+  const toast = document.getElementById("toast");
+  if (!toast) return;
+  toast.textContent = message;
+  toast.classList.add("is-visible");
+  clearTimeout(showToast._timer);
+  showToast._timer = setTimeout(() => {
+    toast.classList.remove("is-visible");
+  }, 2600);
+}
+
+function renderAgenda() {
+  const grid = document.getElementById("card-grid");
+  if (!grid) return;
+  grid.innerHTML = "";
+
+  agendaConfig.teachers.forEach((teacher) => {
+    const card = document.createElement("div");
+    card.className = "card";
+
+    const header = document.createElement("div");
+    header.className = "cabecalho";
+
+    const title = document.createElement("h2");
+    title.textContent = teacher.name || "Professor";
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "card-checkbox";
+    checkbox.id = teacher.checkboxId;
+    checkbox.checked = localStorage.getItem(teacher.checkboxId) === "true";
+
+    header.appendChild(title);
+    header.appendChild(checkbox);
+    card.appendChild(header);
+
+    teacher.subjects.forEach((subject) => {
+      const subjectTitle = document.createElement("h3");
+      subjectTitle.textContent = subject.name || "Matéria";
+      card.appendChild(subjectTitle);
+
+      subject.groups.forEach((group) => {
+        const groupBlock = document.createElement("div");
+        groupBlock.className = "ano-bloco";
+
+        const groupTitle = document.createElement("h4");
+        groupTitle.textContent = group.label || "Turma";
+        groupBlock.appendChild(groupTitle);
+
+        const sortedDays = [...group.days].sort((a, b) => {
+          return (DAY_ORDER[a.label] ?? 99) - (DAY_ORDER[b.label] ?? 99);
+        });
+
+        sortedDays.forEach((day) => {
+          const dayBlock = document.createElement("div");
+          dayBlock.className = `dia ${DAY_CLASS_MAP[day.label] || ""}`.trim();
+          dayBlock.dataset.day = day.label;
+
+          const dayTitle = document.createElement("h5");
+          dayTitle.textContent = day.label;
+          dayBlock.appendChild(dayTitle);
+
+          const box = document.createElement("div");
+          box.className = "box";
+
+          const contentLabel = document.createElement("div");
+          contentLabel.className = "titulo";
+          contentLabel.textContent = "Conteúdo";
+
+          const contentInput = document.createElement("input");
+          contentInput.id = day.fields.contentId;
+          contentInput.className = "card-textarea";
+          contentInput.type = "text";
+          contentInput.placeholder = "Digite o conteúdo";
+          contentInput.value = localStorage.getItem(day.fields.contentId) || "";
+
+          const homeworkLabel = document.createElement("div");
+          homeworkLabel.className = "titulo";
+          homeworkLabel.textContent = "Atividade para casa";
+
+          const homeworkInput = document.createElement("input");
+          homeworkInput.id = day.fields.homeworkId;
+          homeworkInput.className = "card-textarea";
+          homeworkInput.type = "text";
+          homeworkInput.placeholder = "Digite a atividade";
+          homeworkInput.value = localStorage.getItem(day.fields.homeworkId) || "";
+
+          box.appendChild(contentLabel);
+          box.appendChild(contentInput);
+          box.appendChild(homeworkLabel);
+          box.appendChild(homeworkInput);
+          dayBlock.appendChild(box);
+          groupBlock.appendChild(dayBlock);
+        });
+
+        card.appendChild(groupBlock);
       });
     });
 
-    const camposDeData = [
-      document.getElementById("campo-data-1"),
-      document.getElementById("campo-data-2"),
-    ];
-    camposDeData.forEach((campo) => {
-      const id = campo.id;
-      const salvo = localStorage.getItem(id);
-      if (salvo !== null) {
-        campo.value = salvo;
-      }
-      campo.addEventListener("input", () => {
-        localStorage.setItem(id, campo.value);
+    grid.appendChild(card);
+  });
+
+  requestMasonryRefresh();
+}
+
+function renderManager() {
+  const list = document.getElementById("manager-list");
+  if (!list) return;
+  list.innerHTML = "";
+
+  if (agendaConfig.teachers.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "manager-empty";
+    empty.textContent = "Nenhum professor cadastrado ainda.";
+    list.appendChild(empty);
+    return;
+  }
+
+  agendaConfig.teachers.forEach((teacher) => {
+    const teacherCard = document.createElement("div");
+    teacherCard.className = "manager-card";
+
+    const teacherHeader = document.createElement("div");
+    teacherHeader.className = "manager-card-header";
+
+    const teacherInput = document.createElement("input");
+    teacherInput.type = "text";
+    teacherInput.value = teacher.name;
+    teacherInput.placeholder = "Nome do professor";
+    teacherInput.dataset.action = "update-teacher";
+    teacherInput.dataset.teacherId = teacher.id;
+
+    const teacherRemove = document.createElement("button");
+    teacherRemove.className = "btn btn-ghost";
+    teacherRemove.dataset.action = "remove-teacher";
+    teacherRemove.dataset.teacherId = teacher.id;
+    teacherRemove.innerHTML = '<i class="fa-solid fa-trash"></i> Remover';
+
+    teacherHeader.appendChild(teacherInput);
+    teacherHeader.appendChild(teacherRemove);
+    teacherCard.appendChild(teacherHeader);
+
+    const subjectList = document.createElement("div");
+    subjectList.className = "manager-subjects";
+
+    teacher.subjects.forEach((subject) => {
+      const subjectCard = document.createElement("div");
+      subjectCard.className = "manager-subject";
+
+      const subjectHeader = document.createElement("div");
+      subjectHeader.className = "manager-subject-header";
+
+      const subjectInput = document.createElement("input");
+      subjectInput.type = "text";
+      subjectInput.value = subject.name;
+      subjectInput.placeholder = "Matéria";
+      subjectInput.dataset.action = "update-subject";
+      subjectInput.dataset.teacherId = teacher.id;
+      subjectInput.dataset.subjectId = subject.id;
+
+      const subjectRemove = document.createElement("button");
+      subjectRemove.className = "btn btn-ghost";
+      subjectRemove.dataset.action = "remove-subject";
+      subjectRemove.dataset.teacherId = teacher.id;
+      subjectRemove.dataset.subjectId = subject.id;
+      subjectRemove.innerHTML = '<i class="fa-solid fa-trash"></i>';
+
+      subjectHeader.appendChild(subjectInput);
+      subjectHeader.appendChild(subjectRemove);
+      subjectCard.appendChild(subjectHeader);
+
+      const groupsWrap = document.createElement("div");
+      groupsWrap.className = "manager-groups";
+
+      subject.groups.forEach((group) => {
+        const groupCard = document.createElement("div");
+        groupCard.className = "manager-group";
+
+        const groupHeader = document.createElement("div");
+        groupHeader.className = "manager-group-header";
+
+        const groupInput = document.createElement("input");
+        groupInput.type = "text";
+        groupInput.value = group.label;
+        groupInput.placeholder = "Turma (ex: 7o ano TARDE)";
+        groupInput.dataset.action = "update-group";
+        groupInput.dataset.teacherId = teacher.id;
+        groupInput.dataset.subjectId = subject.id;
+        groupInput.dataset.groupId = group.id;
+
+        const groupRemove = document.createElement("button");
+        groupRemove.className = "btn btn-ghost";
+        groupRemove.dataset.action = "remove-group";
+        groupRemove.dataset.teacherId = teacher.id;
+        groupRemove.dataset.subjectId = subject.id;
+        groupRemove.dataset.groupId = group.id;
+        groupRemove.innerHTML = '<i class="fa-solid fa-trash"></i>';
+
+        groupHeader.appendChild(groupInput);
+        groupHeader.appendChild(groupRemove);
+        groupCard.appendChild(groupHeader);
+
+        const dayPicker = document.createElement("div");
+        dayPicker.className = "day-picker";
+        DAYS.forEach((day) => {
+          const dayItem = document.createElement("label");
+          dayItem.className = "day-option";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = group.days.some((item) => item.label === day.label);
+          checkbox.dataset.action = "toggle-day";
+          checkbox.dataset.teacherId = teacher.id;
+          checkbox.dataset.subjectId = subject.id;
+          checkbox.dataset.groupId = group.id;
+          checkbox.dataset.dayLabel = day.label;
+
+          const span = document.createElement("span");
+          span.textContent = day.short;
+
+          dayItem.appendChild(checkbox);
+          dayItem.appendChild(span);
+          dayPicker.appendChild(dayItem);
+        });
+
+        groupCard.appendChild(dayPicker);
+        groupsWrap.appendChild(groupCard);
+      });
+
+      subjectCard.appendChild(groupsWrap);
+
+      const addGroup = document.createElement("div");
+      addGroup.className = "manager-add";
+
+      const groupLabel = document.createElement("input");
+      groupLabel.type = "text";
+      groupLabel.placeholder = "Nova turma";
+      groupLabel.dataset.newGroupLabel = subject.id;
+
+      const addGroupPicker = document.createElement("div");
+      addGroupPicker.className = "day-picker";
+      DAYS.forEach((day) => {
+        const dayItem = document.createElement("label");
+        dayItem.className = "day-option";
+
+        const checkbox = document.createElement("input");
+        checkbox.type = "checkbox";
+        checkbox.dataset.newGroupDay = day.label;
+        checkbox.dataset.subjectId = subject.id;
+
+        const span = document.createElement("span");
+        span.textContent = day.short;
+
+        dayItem.appendChild(checkbox);
+        dayItem.appendChild(span);
+        addGroupPicker.appendChild(dayItem);
+      });
+
+      const addGroupButton = document.createElement("button");
+      addGroupButton.className = "btn btn-ghost";
+      addGroupButton.dataset.action = "add-group";
+      addGroupButton.dataset.teacherId = teacher.id;
+      addGroupButton.dataset.subjectId = subject.id;
+      addGroupButton.innerHTML = '<i class="fa-solid fa-circle-plus"></i> Adicionar turma';
+
+      addGroup.appendChild(groupLabel);
+      addGroup.appendChild(addGroupPicker);
+      addGroup.appendChild(addGroupButton);
+      subjectCard.appendChild(addGroup);
+
+      subjectList.appendChild(subjectCard);
+    });
+
+    teacherCard.appendChild(subjectList);
+
+    const addSubject = document.createElement("div");
+    addSubject.className = "manager-add";
+
+    const subjectInput = document.createElement("input");
+    subjectInput.type = "text";
+      subjectInput.placeholder = "Nova matéria";
+    subjectInput.dataset.newSubjectFor = teacher.id;
+
+    const addSubjectButton = document.createElement("button");
+    addSubjectButton.className = "btn btn-ghost";
+    addSubjectButton.dataset.action = "add-subject";
+    addSubjectButton.dataset.teacherId = teacher.id;
+      addSubjectButton.innerHTML = '<i class="fa-solid fa-circle-plus"></i> Adicionar matéria';
+
+    addSubject.appendChild(subjectInput);
+    addSubject.appendChild(addSubjectButton);
+    teacherCard.appendChild(addSubject);
+
+    list.appendChild(teacherCard);
+  });
+}
+
+function renderReport() {
+  const report = document.getElementById("field-report");
+  if (!report) return;
+
+  const lines = [];
+  lines.push("RELATÓRIO DE CAMPOS DA AGENDA");
+  lines.push("--------------------------------");
+  lines.push("Use os códigos entre {{ }} no Word.");
+  lines.push("");
+  lines.push("Datas:");
+  lines.push("- campoData1  | Data inicial | {{campoData1}}");
+  lines.push("- campoData2  | Data final   | {{campoData2}}");
+  lines.push("");
+
+  agendaConfig.teachers.forEach((teacher) => {
+    const teacherName = teacher.name || "Professor";
+    teacher.subjects.forEach((subject) => {
+      const subjectName = subject.name || "Matéria";
+      subject.groups.forEach((group) => {
+        const groupLabel = group.label || "Turma";
+        group.days.forEach((day) => {
+          lines.push(
+            `${day.fields.contentId} | ${teacherName} > ${subjectName} > ${groupLabel} > ${day.label} > Conteúdo | {{${day.fields.contentId}}}`
+          );
+          lines.push(
+            `${day.fields.homeworkId} | ${teacherName} > ${subjectName} > ${groupLabel} > ${day.label} > Atividade | {{${day.fields.homeworkId}}}`
+          );
+        });
       });
     });
-  
-    // BOTÃO DE LIMPAR
-    const botaoLimpar = document.getElementById('limparCampos');
-    if (botaoLimpar) {
-      botaoLimpar.addEventListener('click', () => {
-        campos.forEach(campo => {
-          localStorage.removeItem(campo.id);
-          campo.value = '';
-        });
-        checkboxes.forEach(c => {
-          localStorage.removeItem(c.id);
-          c.checked = false;
-        });
-        camposDeData.forEach(campo => {
-          localStorage.removeItem(campo.id);
-          campo.value = '';
-        });
-      });
+  });
+
+  report.value = lines.join("\n");
+}
+
+function renderMissingTeachers() {
+  const list = document.getElementById("missing-list");
+  if (!list) return;
+  list.innerHTML = "";
+
+  const missing = agendaConfig.teachers.filter((teacher) => {
+    const stored = localStorage.getItem(teacher.checkboxId);
+    return stored !== "true";
+  });
+
+  if (missing.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "missing-empty";
+    empty.textContent = "Nenhum professor em falta.";
+    list.appendChild(empty);
+    return;
+  }
+
+  missing.forEach((teacher) => {
+    const item = document.createElement("div");
+    item.className = "missing-item";
+
+    const name = document.createElement("span");
+    name.textContent = teacher.name || "Professor";
+
+    const tag = document.createElement("span");
+    tag.className = "missing-tag";
+    tag.textContent = "Falta";
+
+    item.appendChild(name);
+    item.appendChild(tag);
+    list.appendChild(item);
+  });
+}
+
+function toggleEmptyState() {
+  const empty = document.getElementById("empty-state");
+  if (!empty) return;
+  empty.style.display = agendaConfig.teachers.length ? "none" : "block";
+}
+
+function requestMasonryRefresh() {
+  if (typeof window.refreshMasonry === "function") {
+    window.refreshMasonry();
+  } else {
+    setTimeout(() => {
+      if (typeof window.refreshMasonry === "function") {
+        window.refreshMasonry();
+      }
+    }, 300);
+  }
+}
+
+function renderAll() {
+  renderAgenda();
+  renderManager();
+  renderReport();
+  renderMissingTeachers();
+  toggleEmptyState();
+}
+
+function setupCardEvents() {
+  const grid = document.getElementById("card-grid");
+  if (!grid) return;
+
+  grid.addEventListener("input", (event) => {
+    const target = event.target;
+    if (target && target.classList.contains("card-textarea")) {
+      localStorage.setItem(target.id, target.value);
     }
   });
 
-  document.getElementById("gerar-doc").addEventListener("click", function () {
-    const campos = {
-      campoA: document.getElementById("campo-A").value,
-      campoB: document.getElementById("campo-B").value,
-      campoC: document.getElementById("campo-C").value,
-      campoD: document.getElementById("campo-D").value,
-      campoE: document.getElementById("campo-E").value,
-      campoF: document.getElementById("campo-F").value,
-      campoG: document.getElementById("campo-G").value,
-      campoH: document.getElementById("campo-H").value,
-      campoI: document.getElementById("campo-I").value,
-      campoJ: document.getElementById("campo-J").value,
-      campoK: document.getElementById("campo-K").value,
-      campoL: document.getElementById("campo-L").value,
-      campoM: document.getElementById("campo-M").value,
-      campoN: document.getElementById("campo-N").value,
-      campoP: document.getElementById("campo-P").value,
-      campoQ: document.getElementById("campo-Q").value,
-      campoR: document.getElementById("campo-R").value,
-      campoR1: document.getElementById("campo-R1").value,
-      campoR2: document.getElementById("campo-R2").value,
-      campoS: document.getElementById("campo-S").value,
-      campoT: document.getElementById("campo-T").value,
-      campoT1: document.getElementById("campo-T1").value,
-      campoT2: document.getElementById("campo-T2").value,
-      campoT20: document.getElementById("campo-T20").value,
-      campoU0: document.getElementById("campo-U0").value,
-      campoU: document.getElementById("campo-U").value,
-      campoV: document.getElementById("campo-V").value,
-      campoX: document.getElementById("campo-X").value,
-      campoY: document.getElementById("campo-Y").value,
-      campoZ: document.getElementById("campo-Z").value,
-    
-      campoAA: document.getElementById("campo-AA").value,
-      campoAB: document.getElementById("campo-AB").value,
-      campoAC: document.getElementById("campo-AC").value,
-      campoAD: document.getElementById("campo-AD").value,
-      campoAE: document.getElementById("campo-AE").value,
-      campoAF: document.getElementById("campo-AF").value,
-      campoAG: document.getElementById("campo-AG").value,
-      campoAH: document.getElementById("campo-AH").value,
-      campoAI: document.getElementById("campo-AI").value,
-      campoAJ: document.getElementById("campo-AJ").value,
-      campoAK: document.getElementById("campo-AK").value,
-      campoAL: document.getElementById("campo-AL").value,
-      campoAM: document.getElementById("campo-AM").value,
-      campoAN: document.getElementById("campo-AN").value,
-      campoAO: document.getElementById("campo-AO").value,
-      campoAP: document.getElementById("campo-AP").value,
-      campoAQ: document.getElementById("campo-AQ").value,
-      campoAR: document.getElementById("campo-AR").value,
-      campoAS: document.getElementById("campo-AS").value,
-      campoAT: document.getElementById("campo-AT").value,
-      campoAU: document.getElementById("campo-AU").value,
-      campoAV: document.getElementById("campo-AV").value,
-      campoAW: document.getElementById("campo-AW").value,
-      campoAX: document.getElementById("campo-AX").value,
-      campoAY: document.getElementById("campo-AY").value,
-      campoAZ: document.getElementById("campo-AZ").value,
-    
-      campoBA: document.getElementById("campo-BA").value,
-      campoBB: document.getElementById("campo-BB").value,
-      campoBC: document.getElementById("campo-BC").value,
-      campoBD: document.getElementById("campo-BD").value,
-      campoBE: document.getElementById("campo-BE").value,
-      campoBF: document.getElementById("campo-BF").value,
-      campoBG: document.getElementById("campo-BG").value,
-      campoBH: document.getElementById("campo-BH").value,
-      campoBI: document.getElementById("campo-BI").value,
-      campoBJ: document.getElementById("campo-BJ").value,
-      campoBK: document.getElementById("campo-BK").value,
-      campoBL: document.getElementById("campo-BL").value,
-      campoBM: document.getElementById("campo-BM").value,
-      campoBN: document.getElementById("campo-BN").value,
-      campoBM1: document.getElementById("campo-BM1").value,
-      campoBN1: document.getElementById("campo-BN1").value,
-      campoBQ: document.getElementById("campo-BQ").value,
-      campoBR: document.getElementById("campo-BR").value,
-      campoBS: document.getElementById("campo-BS").value,
-      campoBT: document.getElementById("campo-BT").value,
-      campoBU: document.getElementById("campo-BU").value,
-      campoBV: document.getElementById("campo-BV").value,
-      campoBW: document.getElementById("campo-BW").value,
-      campoBX: document.getElementById("campo-BX").value,
-      campoBY: document.getElementById("campo-BY").value,
-      campoBZ: document.getElementById("campo-BZ").value,
-    
-      campoCA: document.getElementById("campo-CA").value,
-      campoCB: document.getElementById("campo-CB").value,
-      campoCC: document.getElementById("campo-CC").value,
-      campoCD: document.getElementById("campo-CD").value,
-      campoCE: document.getElementById("campo-CE").value,
-      campoCF: document.getElementById("campo-CF").value,
-      campoCG: document.getElementById("campo-CG").value,
-      campoCH: document.getElementById("campo-CH").value,
-      campoCI: document.getElementById("campo-CI").value,
-      campoCJ: document.getElementById("campo-CJ").value,
-      campoCK: document.getElementById("campo-CK").value,
-      campoCL: document.getElementById("campo-CL").value,
-      campoCM: document.getElementById("campo-CM").value,
-      campoCN: document.getElementById("campo-CN").value,
-      campoCO: document.getElementById("campo-CO").value,
-      campoCP: document.getElementById("campo-CP").value,
-      campoCQ: document.getElementById("campo-CQ").value,
-      campoCR: document.getElementById("campo-CR").value,
-      campoCS: document.getElementById("campo-CS").value,
-      campoCT: document.getElementById("campo-CT").value,
-      campoCU: document.getElementById("campo-CU").value,
-      campoCV: document.getElementById("campo-CV").value,
-      campoCW: document.getElementById("campo-CW").value,
-      campoCX: document.getElementById("campo-CX").value,
-      campoCY: document.getElementById("campo-CY").value,
-      campoCZ: document.getElementById("campo-CZ").value,
-      campoDA: document.getElementById("campo-DA").value,
-      campoDB: document.getElementById("campo-DB").value,
-      campoDC: document.getElementById("campo-DC").value,
-      campoDD: document.getElementById("campo-DD").value,
-      campoDE: document.getElementById("campo-DE").value,
-      campoDF: document.getElementById("campo-DF").value,
-      campoDG: document.getElementById("campo-DG").value,
-      campoDH: document.getElementById("campo-DH").value,
-      campoDI: document.getElementById("campo-DI").value,
-      campoDJ: document.getElementById("campo-DJ").value,
-      campoDK: document.getElementById("campo-DK").value,
-      campoDL: document.getElementById("campo-DL").value,
-      campoDM: document.getElementById("campo-DM").value,
-      campoDN: document.getElementById("campo-DN").value,
-      campoDO: document.getElementById("campo-DO").value,
-      campoDP: document.getElementById("campo-DP").value,
-      campoDQ: document.getElementById("campo-DQ").value,
-      campoDR: document.getElementById("campo-DR").value,
-      campoDS: document.getElementById("campo-DS").value,
-      campoDT: document.getElementById("campo-DT").value,
-      campoDU: document.getElementById("campo-DU").value,
-      campoDV: document.getElementById("campo-DV").value,
-      campoDW: document.getElementById("campo-DW").value,
-      campoDX: document.getElementById("campo-DX").value,
-    
-      campoEA: document.getElementById("campo-EA").value,
-      campoEB: document.getElementById("campo-EB").value,
-      campoEE: document.getElementById("campo-EE").value,
-      campoEF: document.getElementById("campo-EF").value,
-      campoEG: document.getElementById("campo-EG").value,
-      campoEH: document.getElementById("campo-EH").value,
-      campoEI: document.getElementById("campo-EI").value,
-      campoEJ: document.getElementById("campo-EJ").value,
-      campoEK: document.getElementById("campo-EK").value,
-      campoEL: document.getElementById("campo-EL").value,
-      campoEM: document.getElementById("campo-EM").value,
-      campoEN: document.getElementById("campo-EN").value,
-      campoEO: document.getElementById("campo-EO").value,
-      campoEP: document.getElementById("campo-EP").value,
-      campoEQ: document.getElementById("campo-EQ").value,
-      campoER: document.getElementById("campo-ER").value,
-      campoES: document.getElementById("campo-ES").value,
-      campoET: document.getElementById("campo-ET").value,
-      campoEW: document.getElementById("campo-EW").value,
-      campoEX: document.getElementById("campo-EX").value,
-      campoEY: document.getElementById("campo-EY").value,
-      campoEZ: document.getElementById("campo-EZ").value,
-    
-      campoFA: document.getElementById("campo-FA").value,
-      campoFB: document.getElementById("campo-FB").value,
-      campoFC: document.getElementById("campo-FC").value,
-      campoFD: document.getElementById("campo-FD").value,
-      campoFE: document.getElementById("campo-FE").value,
-      campoFF: document.getElementById("campo-FF").value,
-      campoFG: document.getElementById("campo-FG").value,
-      campoFH: document.getElementById("campo-FH").value,
-      campoFI: document.getElementById("campo-FI").value,
-      campoFJ: document.getElementById("campo-FJ").value,
-      campoFK: document.getElementById("campo-FK").value,
-      campoFL: document.getElementById("campo-FL").value,
-      campoFM: document.getElementById("campo-FM").value,
-      campoFN: document.getElementById("campo-FN").value,
-      campoFO: document.getElementById("campo-FO").value,
-      campoFP: document.getElementById("campo-FP").value,
-      campoFQ: document.getElementById("campo-FQ").value,
-      campoFR: document.getElementById("campo-FR").value,
-      campoFS: document.getElementById("campo-FS").value,
-      campoFT: document.getElementById("campo-FT").value,
-      campoFU: document.getElementById("campo-FU").value,
-      campoFV: document.getElementById("campo-FV").value,
-      campoFW: document.getElementById("campo-FW").value,
-      campoFX: document.getElementById("campo-FX").value,
-      campoFY: document.getElementById("campo-FY").value,
-      campoFZ: document.getElementById("campo-FZ").value,
-    
-      campoGA: document.getElementById("campo-GA").value,
-      campoGB: document.getElementById("campo-GB").value,
-      campoGC: document.getElementById("campo-GC").value,
-      campoGD: document.getElementById("campo-GD").value,
-      campoGE: document.getElementById("campo-GE").value,
-      campoGF: document.getElementById("campo-GF").value,
-      campoGG: document.getElementById("campo-GG").value,
-      campoGH: document.getElementById("campo-GH").value,
-      campoGI: document.getElementById("campo-GI").value,
-      campoGJ: document.getElementById("campo-GJ").value,
-      campoGK: document.getElementById("campo-GK").value,
-      campoGL: document.getElementById("campo-GL").value,
-      campoGM: document.getElementById("campo-GM").value,
-      campoGN: document.getElementById("campo-GN").value,
-      campoGO: document.getElementById("campo-GO").value,
-      campoGP: document.getElementById("campo-GP").value,
-      campoGQ: document.getElementById("campo-GQ").value,
-      campoGR: document.getElementById("campo-GR").value,
-      campoGS: document.getElementById("campo-GS").value,
-      campoGT: document.getElementById("campo-GT").value,
-      campoGU: document.getElementById("campo-GU").value,
-      campoGV: document.getElementById("campo-GV").value,
-      campoGW: document.getElementById("campo-GW").value,
-      campoGX: document.getElementById("campo-GX").value,
-      campoGY: document.getElementById("campo-GY").value,
-      campoGZ: document.getElementById("campo-GZ").value,
-    
-      campoHA: document.getElementById("campo-HA").value,
-      campoHB: document.getElementById("campo-HB").value,
-      campoHC: document.getElementById("campo-HC").value,
-      campoHD: document.getElementById("campo-HD").value,
-      campoHE: document.getElementById("campo-HE").value,
-      campoHF: document.getElementById("campo-HF").value,
-      campoHG: document.getElementById("campo-HG").value,
-      campoHH: document.getElementById("campo-HH").value,
-      campoHI: document.getElementById("campo-HI").value,
-      campoHJ: document.getElementById("campo-HJ").value,
-      campoHK: document.getElementById("campo-HK").value,
-      campoHL: document.getElementById("campo-HL").value,
-      campoHM: document.getElementById("campo-HM").value,
-      campoHN: document.getElementById("campo-HN").value,
-      campoHO: document.getElementById("campo-HO").value,
-      campoHP: document.getElementById("campo-HP").value,
-      campoHQ: document.getElementById("campo-HQ").value,
-      campoHR: document.getElementById("campo-HR").value,
-      campoHS: document.getElementById("campo-HS").value,
-      campoHT: document.getElementById("campo-HT").value,
-      campoHU: document.getElementById("campo-HU").value,
-      campoHV: document.getElementById("campo-HV").value,
-      campoHW: document.getElementById("campo-HW").value,
-      campoHX: document.getElementById("campo-HX").value,
-      campoHY: document.getElementById("campo-HY").value,
-      campoHZ: document.getElementById("campo-HZ").value,
-    
-      campoIA: document.getElementById("campo-IA").value,
-      campoIB: document.getElementById("campo-IB").value,
-      campoIC: document.getElementById("campo-IC").value,
-      campoID: document.getElementById("campo-ID").value,
-      campoIE: document.getElementById("campo-IE").value,
-      campoIF: document.getElementById("campo-IF").value,
-      campoIG: document.getElementById("campo-IG").value,
-      campoIH: document.getElementById("campo-IH").value,
-      campoII: document.getElementById("campo-II").value,
-      campoIJ: document.getElementById("campo-IJ").value,
-      campoIK: document.getElementById("campo-IK").value,
-      campoIL: document.getElementById("campo-IL").value,
-      campoIM: document.getElementById("campo-IM").value,
-      campoIN: document.getElementById("campo-IN").value,
-      campoIO1: document.getElementById("campo-IO1").value,
-      campoIP1: document.getElementById("campo-IP1").value,
-      campoIO: document.getElementById("campo-IO").value,
-      campoIP: document.getElementById("campo-IP").value,
-      campoIQ: document.getElementById("campo-IQ").value,
-      campoIR: document.getElementById("campo-IR").value,
-      campoIS: document.getElementById("campo-IS").value,
-      campoIT: document.getElementById("campo-IT").value,
-      campoRL1: document.getElementById("campo-RL1").value,
-      campoRL2: document.getElementById("campo-RL2").value,
-      campoRL3: document.getElementById("campo-RL3").value,
-      campoRL4: document.getElementById("campo-RL4").value,
-      campoRL5: document.getElementById("campo-RL5").value,
+  grid.addEventListener("change", (event) => {
+    const target = event.target;
+    if (target && target.classList.contains("card-checkbox")) {
+      localStorage.setItem(target.id, target.checked);
+      renderMissingTeachers();
+    }
+  });
+}
 
-      campoData1: document.getElementById("campo-data-1").value,
-      campoData2: document.getElementById("campo-data-2").value,
-    };
-  
-    // Configuração dos documentos e os campos que cada um usa
-    const modelos = [
-      {
-        nome: "6-ANO-M.docx",
-        camposUsados: ["campoV", "campoX", "campoAI", "campoAJ",
-          "campoAK", "campoAL", "campoBK", "campoBL", "campoCM", "campoCN", "campoCO", "campoCP", "campoCU", "campoCV", "campoCW", "campoCX", "campoEG", "campoEH", "campoFG", "campoFH", "campoGH"
-          , "campoGA", "campoGB", "campoGC", "campoGD", "campoGG", "campoGH", "campoGS", "campoGT", "campoGU", "campoGV", "campoRL1", "campoRL2", "campoRL3", "campoRL4", "campoRL5", "campoData1", "campoData2"
-        ],
-      },
-      {
-        nome: "7-ANO-M.docx",
-        camposUsados: ["campoC", "campoD", "campoY", "campoZ",
-          "campoAM", "campoAN", "campoAO", "campoAP", "campoCQ", "campoCR", "campoCS", "campoCT", "campoCY", "campoCZ", "campoDA", "campoDB", "campoDC", "campoDD", "campoEI", "campoEJ"
-          , "campoFI", "campoFJ", "campoGE", "campoGF", "campoGI", "campoGJ", "campoGW", "campoGX", "campoGY", "campoGZ", "campoIA", "campoIB", "campoHY", "campoHZ",  "campoData1", "campoData2"
-        ],
-      },
-      {
-        nome: "8-ANO-M.docx",
-        camposUsados: ["campoG", "campoH", "campoAA", "campoAB",
-          "campoDE", "campoDF", "campoDG", "campoDH", "campoEK", "campoEL", "campoFS", "campoFT", "campoFU", "campoFV", "campoGK", "campoGL", "campoGM", "campoGN", "campoHA", "campoHB", "campoHC", "campoHD"
-          , "campoIG", "campoIH", "campoII", "campoIJ", "campoIQ", "campoIR",, "campoIC", "campoID", "campoData1", "campoData2"
-        ],
-      },
-      {
-        nome: "9-ANO-M.docx",
-        camposUsados: ["campoAC", "campoAD", "campoK", "campoL",
-          "campoBI", "campoBJ", "campoDI", "campoDJ", "campoDK", "campoDL", "campoEM", "campoEN", "campoFW", "campoFX", "campoFY", "campoFZ", "campoGO", "campoGP", "campoGQ", "campoGR"
-          , "campoHE", "campoHF", "campoHG", "campoHH", "campoIE", "campoIF", "campoIK", "campoIL", "campoIM", "campoIN", "campoIO", "campoIP", "campoIS", "campoIT", "campoData1", "campoData2"
-        ],
-      },
-      {
-        nome: "6-ANO-T.docx",
-        camposUsados: ["campoA", "campoB", "campoR", "campoS",
-          "campoR1", "campoR2", "campoAW", "campoAX", "campoAY", "campoAZ",, "campoBA", "campoBB", "campoBU", "campoBV", "campoBW", "campoBX", "campoCC", "campoCD"
-          , "campoDM", "campoDN", "campoDO", "campoDP", "campoEG", "campoEH", "campoFG", "campoFH", "campoHI", "campoHJ", "campoHK", "campoHL", "campoHM", "campoHN", "campoHO", "campoHP"
-          , "campoHW", "campoHX", , "campoRL1", "campoRL2", "campoRL3", "campoRL4", "campoRL5", "campoData1", "campoData2"
-        ],
-      },
-      {
-        nome: "7-ANO-T.docx",
-        camposUsados: [, "campoC", "campoD", "campoM", "campoN", "campoP", "campoQ",
-           "campoT", "campoT1",  "campoT2", "campoU",  "campoT20", "campoU0", "campoBC", "campoBD", "campoBE", "campoBF", "campoBG", "campoBH", "campoBM", "campoBN", "campoBM1", "campoBN1", "campoBY", "campoBZ", "campoCA", "campoCB"
-           , "campoDQ", "campoDR", "campoDS", "campoDT", "campoEI", "campoEJ", "campoEO", "campoEP", "campoEQ", "campoER", "campoES", "campoET", "campoFI", "campoFJ", "campoHQ", "campoHR", "campoHY", "campoHZ"
-           , "campoData1", "campoData2"
-        ],
-      },
-      {
-        nome: "8-ANO-T.docx",
-        camposUsados: ["campoE", "campoF", "campoG", "campoH",
-          "campoAE", "campoAF", "campoAQ", "campoAR", "campoAS", "campoAT", "campoBQ", "campoBR", "campoCE", "campoCF", "campoCG", "campoCH"
-          , "campoDU", "campoDV", "campoDW", "campoDX", "campoEK", "campoEL", "campoEW", "campoEX", "campoEY", "campoEZ", "campoFK", "campoFL"
-          , "campoFM", "campoFN", "campoHS", "campoHT", "campoData1", "campoData2"
-        ],
-      },
-      {
-        nome: "9-ANO-T.docx",
-        camposUsados: ["campoI", "campoJ", "campoK", "campoL",
-        "campoAG", "campoAH", "campoAU", "campoAV", "campoBI", "campoBJ", "campoBS", "campoBT", "campoCI", "campoCJ", "campoCK", "campoCL", "campoEA", "campoEB",
-        "campoEE", "campoEF", "campoEM", "campoEN", "campoFA", "campoFB", "campoFC", "campoFD", "campoFE", "campoFF", "campoFO", "campoFP", "campoFQ", "campoFR", "campoHU", "campoHV"
-        , "campoIO", "campoIP","campoIO1", "campoIP1", "campoData1", "campoData2"]
-      },
-      // Adicione mais aqui conforme necessário
-    ];
+function setupManagerEvents() {
+  const addTeacherButton = document.getElementById("add-teacher");
+  const teacherInput = document.getElementById("new-teacher-name");
+  const list = document.getElementById("manager-list");
 
+  if (addTeacherButton && teacherInput) {
+    addTeacherButton.addEventListener("click", () => {
+      const name = teacherInput.value.trim();
+      if (!name) {
+        showToast("Informe o nome do professor.");
+        return;
+      }
+      agendaConfig.teachers.push(createTeacher(name));
+      teacherInput.value = "";
+      saveConfig();
+      renderAll();
+    });
+  }
+
+  if (!list) return;
+
+  list.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-action]");
+    if (!button) return;
+    const action = button.dataset.action;
+
+    if (action === "remove-teacher") {
+      const teacherId = button.dataset.teacherId;
+      agendaConfig.teachers = agendaConfig.teachers.filter(
+        (teacher) => teacher.id !== teacherId
+      );
+      saveConfig();
+      renderAll();
+      return;
+    }
+
+    if (action === "add-subject") {
+      const teacherId = button.dataset.teacherId;
+      const teacher = getTeacherById(teacherId);
+      if (!teacher) return;
+      const input = list.querySelector(`input[data-new-subject-for="${teacherId}"]`);
+      const subjectName = input ? input.value.trim() : "";
+      if (!subjectName) {
+        showToast("Informe o nome da matéria.");
+        return;
+      }
+      teacher.subjects.push(createSubject(subjectName));
+      if (input) input.value = "";
+      saveConfig();
+      renderAll();
+      return;
+    }
+
+    if (action === "remove-subject") {
+      const teacherId = button.dataset.teacherId;
+      const subjectId = button.dataset.subjectId;
+      const teacher = getTeacherById(teacherId);
+      if (!teacher) return;
+      teacher.subjects = teacher.subjects.filter(
+        (subject) => subject.id !== subjectId
+      );
+      saveConfig();
+      renderAll();
+      return;
+    }
+
+    if (action === "add-group") {
+      const teacherId = button.dataset.teacherId;
+      const subjectId = button.dataset.subjectId;
+      const teacher = getTeacherById(teacherId);
+      if (!teacher) return;
+      const subject = getSubjectById(teacher, subjectId);
+      if (!subject) return;
+
+      const labelInput = list.querySelector(
+        `input[data-new-group-label="${subjectId}"]`
+      );
+      const label = labelInput ? labelInput.value.trim() : "";
+      if (!label) {
+        showToast("Informe o nome da turma.");
+        return;
+      }
+
+      const dayChecks = Array.from(
+        list.querySelectorAll(`input[data-subject-id="${subjectId}"][data-new-group-day]`)
+      );
+      const selectedDays = dayChecks
+        .filter((input) => input.checked)
+        .map((input) => input.dataset.newGroupDay);
+
+      if (selectedDays.length === 0) {
+        showToast("Selecione pelo menos um dia.");
+        return;
+      }
+
+      const group = createGroup(label);
+      selectedDays.forEach((dayLabel) => ensureDay(group, dayLabel));
+      subject.groups.push(group);
+
+      if (labelInput) labelInput.value = "";
+      dayChecks.forEach((input) => {
+        input.checked = false;
+      });
+
+      saveConfig();
+      renderAll();
+      return;
+    }
+
+    if (action === "remove-group") {
+      const teacherId = button.dataset.teacherId;
+      const subjectId = button.dataset.subjectId;
+      const groupId = button.dataset.groupId;
+      const teacher = getTeacherById(teacherId);
+      if (!teacher) return;
+      const subject = getSubjectById(teacher, subjectId);
+      if (!subject) return;
+      subject.groups = subject.groups.filter((group) => group.id !== groupId);
+      saveConfig();
+      renderAll();
+      return;
+    }
+  });
+
+  list.addEventListener("change", (event) => {
+    const target = event.target;
+    if (!target) return;
+
+    if (target.dataset.action === "update-teacher") {
+      const teacher = getTeacherById(target.dataset.teacherId);
+      if (teacher) {
+        teacher.name = target.value.trim() || "Professor";
+        saveConfig();
+        renderAgenda();
+        renderReport();
+      }
+      return;
+    }
+
+    if (target.dataset.action === "update-subject") {
+      const teacher = getTeacherById(target.dataset.teacherId);
+      if (!teacher) return;
+      const subject = getSubjectById(teacher, target.dataset.subjectId);
+      if (subject) {
+        subject.name = target.value.trim() || "Matéria";
+        saveConfig();
+        renderAgenda();
+        renderReport();
+      }
+      return;
+    }
+
+    if (target.dataset.action === "update-group") {
+      const teacher = getTeacherById(target.dataset.teacherId);
+      if (!teacher) return;
+      const subject = getSubjectById(teacher, target.dataset.subjectId);
+      if (!subject) return;
+      const group = getGroupById(subject, target.dataset.groupId);
+      if (group) {
+        group.label = target.value.trim() || "Turma";
+        saveConfig();
+        renderAgenda();
+        renderReport();
+      }
+      return;
+    }
+
+    if (target.dataset.action === "toggle-day") {
+      const teacher = getTeacherById(target.dataset.teacherId);
+      if (!teacher) return;
+      const subject = getSubjectById(teacher, target.dataset.subjectId);
+      if (!subject) return;
+      const group = getGroupById(subject, target.dataset.groupId);
+      if (!group) return;
+
+      if (target.checked) {
+        ensureDay(group, target.dataset.dayLabel);
+      } else {
+        removeDay(group, target.dataset.dayLabel);
+      }
+      saveConfig();
+      renderAgenda();
+      renderReport();
+      return;
+    }
+  });
+}
+
+function setupDrawer() {
+  const drawer = document.getElementById("agenda-drawer");
+  const overlay = document.getElementById("drawer-overlay");
+  const toggle = document.getElementById("menu-toggle");
+  const close = document.getElementById("drawer-close");
+  const openManageButton = document.getElementById("empty-open-manage");
+  const openReportButton = document.getElementById("open-report");
+
+  function openDrawer() {
+    if (!drawer || !overlay) return;
+    drawer.classList.add("is-open");
+    overlay.classList.add("is-open");
+    document.body.classList.add("no-scroll");
+    drawer.setAttribute("aria-hidden", "false");
+  }
+
+  function closeDrawer() {
+    if (!drawer || !overlay) return;
+    drawer.classList.remove("is-open");
+    overlay.classList.remove("is-open");
+    document.body.classList.remove("no-scroll");
+    drawer.setAttribute("aria-hidden", "true");
+  }
+
+  toggle?.addEventListener("click", openDrawer);
+  close?.addEventListener("click", closeDrawer);
+  overlay?.addEventListener("click", closeDrawer);
+
+  if (openManageButton) {
+    openManageButton.addEventListener("click", () => {
+      openDrawer();
+      setActiveTab("tab-manage");
+    });
+  }
+
+  if (openReportButton) {
+    openReportButton.addEventListener("click", () => {
+      setActiveTab("tab-manage");
+    });
+  }
+
+  const tabs = drawer?.querySelectorAll(".tab-btn") || [];
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      setActiveTab(tab.dataset.tab);
+    });
+  });
+
+  const scrollButtons = drawer?.querySelectorAll("button[data-scroll]") || [];
+  scrollButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const targetId = button.dataset.scroll;
+      const target = document.getElementById(targetId);
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+      closeDrawer();
+    });
+  });
+
+  function setActiveTab(tabId) {
+    if (!drawer) return;
+    const allTabs = drawer.querySelectorAll(".tab-btn");
+    const panels = drawer.querySelectorAll(".tab-panel");
+
+    allTabs.forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.tab === tabId);
+    });
+
+    panels.forEach((panel) => {
+      panel.classList.toggle("is-active", panel.id === tabId);
+    });
+  }
+}
+
+function setupSearch() {
+  const searchButton = document.getElementById("search-btn");
+  if (!searchButton) return;
+
+  searchButton.addEventListener("click", () => {
+    try {
+      window.find("");
+    } catch (err) {
+      // ignore
+    }
+
+    try {
+      const event = new KeyboardEvent("keydown", {
+        key: "f",
+        ctrlKey: true,
+        metaKey: true,
+      });
+      document.dispatchEvent(event);
+    } catch (err) {
+      // ignore
+    }
+
+    showToast("Se a busca não abrir, use Ctrl+F (ou Cmd+F).");
+  });
+}
+
+function setupDates() {
+  const dateInputs = [
+    document.getElementById("campo-data-1"),
+    document.getElementById("campo-data-2"),
+  ].filter(Boolean);
+
+  dateInputs.forEach((input) => {
+    const saved = localStorage.getItem(input.id);
+    if (saved) input.value = saved;
+    input.addEventListener("input", () => {
+      localStorage.setItem(input.id, input.value);
+    });
+  });
+}
+
+function setupClearButton() {
+  const clearButton = document.getElementById("limparCampos");
+  if (!clearButton) return;
+
+  clearButton.addEventListener("click", () => {
+    document.querySelectorAll(".card-textarea").forEach((input) => {
+      localStorage.removeItem(input.id);
+      input.value = "";
+    });
+    document.querySelectorAll(".card-checkbox").forEach((checkbox) => {
+      localStorage.removeItem(checkbox.id);
+      checkbox.checked = false;
+    });
+    ["campo-data-1", "campo-data-2"].forEach((id) => {
+      const input = document.getElementById(id);
+      if (input) {
+        localStorage.removeItem(id);
+        input.value = "";
+      }
+    });
+    showToast("Campos limpos.");
+  });
+}
 
 function formatarDataBR(dataISO) {
-  if (!dataISO) return "Não Possui";
+  if (!dataISO) return "Não possui";
   const [ano, mes, dia] = dataISO.split("-");
   return `${dia}/${mes}/${ano}`;
 }
 
-campos.campoData1 = formatarDataBR(campos.campoData1);
-campos.campoData2 = formatarDataBR(campos.campoData2);
-  
-    const zip = new JSZip(); // Cria o zip final
-  
-    const promessas = modelos.map((modelo) =>
-      fetch("modelos/" + modelo.nome)
+function coletarCamposParaDoc() {
+  const data = {};
+  document.querySelectorAll(".card-textarea").forEach((input) => {
+    data[input.id] = input.value.trim() || "Não possui";
+  });
+
+  const data1 = document.getElementById("campo-data-1")?.value || "";
+  const data2 = document.getElementById("campo-data-2")?.value || "";
+  data.campoData1 = formatarDataBR(data1);
+  data.campoData2 = formatarDataBR(data2);
+
+  return data;
+}
+
+function setupDocGeneration() {
+  const gerarBtn = document.getElementById("gerar-doc");
+  if (!gerarBtn) return;
+
+  const modelos = [
+    "6-ANO-M.docx",
+    "7-ANO-M.docx",
+    "8-ANO-M.docx",
+    "9-ANO-M.docx",
+    "6-ANO-T.docx",
+    "7-ANO-T.docx",
+    "8-ANO-T.docx",
+    "9-ANO-T.docx",
+  ];
+
+  gerarBtn.addEventListener("click", () => {
+    const campos = coletarCamposParaDoc();
+    const zip = new JSZip();
+
+    const promessas = modelos.map((nome) =>
+      fetch(`modelos/${nome}`)
         .then((res) => res.arrayBuffer())
         .then((content) => {
           const zipInterno = new PizZip(content);
@@ -421,65 +917,67 @@ campos.campoData2 = formatarDataBR(campos.campoData2);
               start: "{{",
               end: "}}",
             },
+            nullGetter() {
+              return "Não possui";
+            },
           });
-  
-          const dadosParaEsteModelo = {};
-          modelo.camposUsados.forEach((campo) => {
-            dadosParaEsteModelo[campo] = campos[campo]?.trim() || "Não Possui";
-          });
-  
-          doc.setData(dadosParaEsteModelo);
+
+          doc.setData(campos);
           doc.render();
-  
+
           const blob = doc.getZip().generate({ type: "blob" });
-          zip.file("Agenda-" + modelo.nome, blob); // Adiciona ao zip
+          zip.file(`Agenda-${nome}`, blob);
         })
         .catch((err) => {
-          console.error("Erro ao processar modelo:", modelo.nome, err);
+          console.error("Erro ao processar modelo:", nome, err);
         })
     );
-  
-    // Espera todos os documentos serem gerados
+
     Promise.all(promessas).then(() => {
       zip.generateAsync({ type: "blob" }).then((conteudoZip) => {
         saveAs(conteudoZip, "Agendas-Geradas.zip");
       });
     });
   });
+}
 
+function setupReportActions() {
+  const refreshButton = document.getElementById("refresh-report");
+  const downloadButton = document.getElementById("download-report");
 
-  
-  const checkboxes = document.querySelectorAll('.card-checkbox');
-const listaNomes = document.getElementById('lista-nomes');
+  refreshButton?.addEventListener("click", () => {
+    renderReport();
+    showToast("Relatório atualizado.");
+  });
 
-// Função para atualizar a lista
-function atualizarLista() {
-  listaNomes.innerHTML = ''; // Limpa a lista
-  checkboxes.forEach(checkbox => {
-    const nome = checkbox.dataset.nome;
-    if (!checkbox.checked) {
-      const li = document.createElement('li');
-      li.textContent = nome;
-      listaNomes.appendChild(li);
+  downloadButton?.addEventListener("click", () => {
+    const report = document.getElementById("field-report");
+    if (!report) return;
+    const blob = new Blob([report.value], { type: "text/plain" });
+    saveAs(blob, "relatorio-campos.txt");
+  });
+}
+
+function setupGlobalShortcuts() {
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      const drawer = document.getElementById("agenda-drawer");
+      if (drawer && drawer.classList.contains("is-open")) {
+        document.getElementById("drawer-close")?.click();
+      }
     }
   });
 }
 
-// Carrega estado do localStorage
-checkboxes.forEach(c => {
-  const id = c.id;
-  const salvo = localStorage.getItem(id);
-  if (salvo !== null) {
-    c.checked = salvo === 'true';
-  }
-  c.addEventListener('change', () => {
-    localStorage.setItem(id, c.checked);
-    atualizarLista();
-  });
+document.addEventListener("DOMContentLoaded", () => {
+  setupDrawer();
+  setupSearch();
+  setupDates();
+  setupClearButton();
+  setupDocGeneration();
+  setupCardEvents();
+  setupManagerEvents();
+  setupReportActions();
+  setupGlobalShortcuts();
+  renderAll();
 });
-
-// Inicializa lista ao carregar página
-atualizarLista();
-
-
-
