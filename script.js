@@ -888,58 +888,165 @@ function coletarCamposParaDoc() {
   return data;
 }
 
+
+function parseSerieTurno(label) {
+  // tenta achar 6/7/8/9 no começo da string
+  const mSerie = String(label).match(/(^|\s)(6|7|8|9)\s*ano/i);
+  const serie = mSerie ? mSerie[2] : null;
+
+  const up = String(label).toUpperCase();
+  const temManha = up.includes("MANHA") || up.includes("MANHÃ");
+  const temTarde = up.includes("TARDE");
+  const turnos = [];
+  if (temManha) turnos.push("M");
+  if (temTarde) turnos.push("T");
+
+  return { serie, turnos };
+}
+
+function tituloTurma(serie, turno) {
+  const turnoTxt = turno === "M" ? "MANHÃ" : "TARDE";
+  return `${serie}º ANO ENS. FUND. II (${turnoTxt})`;
+}
+
+function buildDocsData(config, campos, campoData1, campoData2) {
+  const docMap = {};
+  const makeKey = (serie, turno) => `${serie}-${turno}`;
+
+  // prepara estrutura base para 6-9, M/T
+  ["6","7","8","9"].forEach((serie) => {
+    ["M","T"].forEach((turno) => {
+      const key = makeKey(serie, turno);
+      docMap[key] = {
+        turmaTitulo: tituloTurma(serie, turno),
+        campoData1,
+        campoData2,
+        dias: [
+          { diaNome: "SEGUNDA-FEIRA", aulas: [] },
+          { diaNome: "TERÇA-FEIRA", aulas: [] },
+          { diaNome: "QUARTA-FEIRA", aulas: [] },
+          { diaNome: "QUINTA-FEIRA", aulas: [] },
+          { diaNome: "SEXTA-FEIRA", aulas: [] },
+        ],
+      };
+    });
+  });
+
+  const idxDia = (label) => {
+    const l = String(label || "").toLowerCase();
+    if (l.includes("segunda")) return 0;
+    if (l.includes("terça") || l.includes("terca")) return 1;
+    if (l.includes("quarta")) return 2;
+    if (l.includes("quinta")) return 3;
+    if (l.includes("sexta")) return 4;
+    return null;
+  };
+
+  const addAula = (serie, turno, diaIndex, disciplina, contentId, homeworkId) => {
+    const key = makeKey(serie, turno);
+    const doc = docMap[key];
+    if (!doc || diaIndex === null) return;
+
+    const conteudo = (campos[contentId] ?? "").trim() || "Não possui";
+    const casa = (campos[homeworkId] ?? "").trim() || "Não possui";
+
+    doc.dias[diaIndex].aulas.push({
+      disciplina: String(disciplina || "").toUpperCase(),
+      conteudo,
+      casa,
+    });
+  };
+
+  // percorre config e distribui aulas por série/turno
+  (config?.teachers || []).forEach((teacher) => {
+    (teacher.subjects || []).forEach((subject) => {
+      (subject.groups || []).forEach((group) => {
+        const { serie, turnos } = parseSerieTurno(group.label);
+        if (!serie || !turnos.length) return;
+
+        // ✅ Se for "MANHA E TARDE", turnos terá ["M","T"] e vai duplicar automaticamente
+        (group.days || []).forEach((day) => {
+          const di = idxDia(day.label);
+          const contentId = day?.fields?.contentId;
+          const homeworkId = day?.fields?.homeworkId;
+          turnos.forEach((turno) => addAula(serie, turno, di, subject.name, contentId, homeworkId));
+        });
+      });
+    });
+  });
+
+  // ordena as aulas de cada dia por disciplina (fica mais organizado)
+  Object.values(docMap).forEach((doc) => {
+    doc.dias.forEach((d) => {
+      d.aulas.sort((a, b) => a.disciplina.localeCompare(b.disciplina, "pt-BR"));
+    });
+    // deixa o doc mais compacto: remove dias sem aulas
+    doc.dias = doc.dias.filter((d) => d.aulas.length > 0);
+  });
+
+  return docMap;
+}
+
 function setupDocGeneration() {
   const gerarBtn = document.getElementById("gerar-doc");
   if (!gerarBtn) return;
 
-  const modelos = [
-    "6-ANO-M.docx",
-    "7-ANO-M.docx",
-    "8-ANO-M.docx",
-    "9-ANO-M.docx",
-    "6-ANO-T.docx",
-    "7-ANO-T.docx",
-    "8-ANO-T.docx",
-    "9-ANO-T.docx",
-  ];
+  gerarBtn.addEventListener("click", async () => {
+    const state = loadConfig();
+    if (!state) {
+      showToast("Nenhuma configuração encontrada.", "error");
+      return;
+    }
 
-  gerarBtn.addEventListener("click", () => {
-    const campos = coletarCamposParaDoc();
-    const zip = new JSZip();
-
-    const promessas = modelos.map((nome) =>
-      fetch(`modelos/${nome}`)
-        .then((res) => res.arrayBuffer())
-        .then((content) => {
-          const zipInterno = new PizZip(content);
-          const doc = new window.docxtemplater(zipInterno, {
-            delimiters: {
-              start: "{{",
-              end: "}}",
-            },
-            nullGetter() {
-              return "Não possui";
-            },
-          });
-
-          doc.setData(campos);
-          doc.render();
-
-          const blob = doc.getZip().generate({ type: "blob" });
-          zip.file(`Agenda-${nome}`, blob);
-        })
-        .catch((err) => {
-          console.error("Erro ao processar modelo:", nome, err);
-        })
-    );
-
-    Promise.all(promessas).then(() => {
-      zip.generateAsync({ type: "blob" }).then((conteudoZip) => {
-        saveAs(conteudoZip, "Agendas-Geradas.zip");
-      });
+    // mapa id -> valor (pega o que você digitou no site)
+    const campos = {};
+    document.querySelectorAll(".card-textarea").forEach((input) => {
+      campos[input.id] = input.value || "";
     });
+
+    const data1 = document.getElementById("campo-data-1")?.value || "";
+    const data2 = document.getElementById("campo-data-2")?.value || "";
+    const campoData1 = formatarDataBR(data1);
+    const campoData2 = formatarDataBR(data2);
+
+    const docMap = buildDocsData(state, campos, campoData1, campoData2);
+
+    const zip = new JSZip();
+    const templateBuf = await fetch(`modelos/modelo-compacto.docx`).then((r) => r.arrayBuffer());
+
+    const keysOrdem = [
+      "6-M","7-M","8-M","9-M",
+      "6-T","7-T","8-T","9-T",
+    ];
+
+    for (const key of keysOrdem) {
+      const docData = docMap[key];
+      if (!docData) continue;
+
+      // se quiser sempre gerar mesmo vazio, comente o if abaixo
+      if (!docData.dias || docData.dias.length === 0) continue;
+
+      const zipInterno = new PizZip(templateBuf);
+      const doc = new window.docxtemplater(zipInterno, {
+        delimiters: { start: "{{", end: "}}" },
+        nullGetter() { return "Não possui"; },
+      });
+
+      doc.setData(docData);
+      doc.render();
+
+      const blob = doc.getZip().generate({ type: "blob" });
+
+      const [serie, turno] = key.split("-");
+      const sufixo = turno === "M" ? "M" : "T";
+      zip.file(`Agenda-${serie}-ANO-${sufixo}.docx`, blob);
+    }
+
+    const conteudoZip = await zip.generateAsync({ type: "blob" });
+    saveAs(conteudoZip, "Agendas-Geradas.zip");
   });
 }
+
 
 function setupReportActions() {
   const refreshButton = document.getElementById("refresh-report");
