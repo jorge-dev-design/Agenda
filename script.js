@@ -1012,7 +1012,7 @@ function setupDocGeneration() {
     const docMap = buildDocsData(state, campos, campoData1, campoData2);
 
     const zip = new JSZip();
-    const templateBuf = await fetch(`modelos/modelo-compacto.docx`).then((r) => r.arrayBuffer());
+    const templateBuf = await fetch(`modelos/modelo.docx`).then((r) => r.arrayBuffer());
 
     const keysOrdem = [
       "6-M","7-M","8-M","9-M",
