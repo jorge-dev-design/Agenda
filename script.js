@@ -1,5 +1,5 @@
 const STORAGE_KEYS = {
-  config: "agenda-config-v2",
+  config: "agenda-config-v3",
 };
 
 const DAYS = [
@@ -54,7 +54,7 @@ function loadConfig() {
 }
 
 function saveConfig() {
-  localStorage.setItem(STORAGE_KEYS.config, JSON.stringify(agendaConfi));
+  localStorage.setItem(STORAGE_KEYS.config, JSON.stringify(agendaConfig));
 }
 
 function nextId(seqKey, prefix) {
