@@ -54,7 +54,7 @@ function loadConfig() {
 }
 
 function saveConfig() {
-  localStorage.setItem(STORAGE_KEYS.config, JSON.stringify(agendaConfig));
+  localStorage.setItem(STORAGE_KEYS.config, JSON.stringify(agendaConfi));
 }
 
 function nextId(seqKey, prefix) {
